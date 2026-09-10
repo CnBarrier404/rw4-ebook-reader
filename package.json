@@ -1,0 +1,12 @@
+{
+  "name": "rw4-ebook-reader",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Redmi Watch 4 Vela JS ebook reader",
+  "scripts": {
+    "build": "aiot build"
+  },
+  "devDependencies": {
+    "aiot-toolkit": "2.0.5"
+  }
+}

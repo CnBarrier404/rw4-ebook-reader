@@ -1,0 +1,25 @@
+{
+  "package": "com.cnbarrier.ebook",
+  "name": "电子书",
+  "versionName": "0.1.0",
+  "versionCode": 1,
+  "minAPILevel": 1,
+  "icon": "/common/icon.png",
+  "deviceTypeList": ["watch"],
+  "features": [],
+  "config": {
+    "designWidth": 390,
+    "logLevel": "debug"
+  },
+  "router": {
+    "entry": "pages/index",
+    "pages": {
+      "pages/index": {
+        "component": "index"
+      }
+    }
+  },
+  "display": {
+    "backgroundColor": "#000000"
+  }
+}
