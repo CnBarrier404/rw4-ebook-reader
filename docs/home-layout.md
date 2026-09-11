@@ -2,6 +2,10 @@
 
 主页采用纯黑背景、常规字重，设置入口仅显示齿轮图标，无边框和背景填充。设置页面暂不实现，图标暂不绑定点击行为。
 
+主页每次显示时通过 [system.file.list](https://iot.mi.com/vela/quickapp/zh/features/data/file.html) 枚举 `internal://mass/` 下的 TXT 文件，仅展示去掉扩展名的书名，不读取正文。使用原生 `list` / `list-item`，每行 `80px`，书名最多两行，超长省略；列表项没有点击行为。空目录显示“暂无小说”，读取失败显示“读取失败”。不包含封面、阅读、删除、排序或搜索功能。
+
+按目标 `390 × 450` 布局，列表显式高度 `322px`，顶端间距 `8px`；空状态保留底部占位以居中。`internal://mass/` 是官方定义的应用私有 Mass URI，与生成器写入 `/data/quickapp/mass/com.cnbarrier.ebook/` 的物理映射仍待实机确认。[文件组织](https://iot.mi.com/vela/quickapp/zh/guide/framework/project-structure.html)、[列表组件](https://iot.mi.com/vela/quickapp/zh/components/container/list.html)。
+
 ## 安全区依据
 
 核对日期：2026-09-11。

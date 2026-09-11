@@ -6,15 +6,60 @@
         <image class="settings-icon" src="/common/settings.png"></image>
       </div>
     </div>
-    <div class="empty-state">
-      <text class="empty-text">暂无小说</text>
+    <list class="book-list" if="{{books.length > 0}}">
+      <list-item class="book-item" type="book" for="{{books}}">
+        <text class="book-title">{{$item.title}}</text>
+      </list-item>
+    </list>
+    <div class="empty-state" if="{{books.length === 0}}">
+      <text class="empty-text">{{statusText}}</text>
     </div>
-    <div class="bottom-space"></div>
+    <div class="bottom-space" if="{{books.length === 0}}"></div>
   </div>
 </template>
 
 <script>
-export default {}
+import file from '@system.file'
+
+export default {
+  private: {
+    books: [],
+    statusText: '正在加载',
+    loading: false
+  },
+
+  onShow() {
+    if (this.loading) return
+    this.loading = true
+    file.list({
+      // BIN installer writes to this application's mass directory.
+      // The physical directory mapping still needs verification on Watch 4.
+      uri: 'internal://mass/',
+      success: (data) => {
+        this.books = data.fileList
+          .filter((entry) => entry.type !== 'dir' && /\.txt$/i.test(entry.uri))
+          .map((entry) => {
+            let name = entry.uri.slice(entry.uri.lastIndexOf('/') + 1)
+            try {
+              name = decodeURIComponent(name)
+            } catch (error) {
+              // Keep the original filename if it contains a literal percent.
+            }
+            return { title: name.replace(/\.txt$/i, '') }
+          })
+        this.statusText = '暂无小说'
+      },
+      fail: (data, code) => {
+        this.books = []
+        this.statusText = '读取失败'
+        console.error('Failed to list books: ' + code)
+      },
+      complete: () => {
+        this.loading = false
+      }
+    })
+  }
+}
 </script>
 
 <style>
@@ -58,6 +103,28 @@ export default {}
   flex: 1;
   align-items: center;
   justify-content: center;
+}
+
+.book-list {
+  width: 100%;
+  height: 322px;
+  margin-top: 8px;
+  flex-shrink: 1;
+}
+
+.book-item {
+  width: 100%;
+  height: 80px;
+  align-items: center;
+}
+
+.book-title {
+  width: 100%;
+  color: #f5f5f5;
+  font-size: 26px;
+  font-weight: normal;
+  lines: 2;
+  text-overflow: ellipsis;
 }
 
 .empty-text {

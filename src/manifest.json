@@ -6,7 +6,7 @@
   "minAPILevel": 1,
   "icon": "/common/icon.png",
   "deviceTypeList": ["watch"],
-  "features": [],
+  "features": [{ "name": "system.file" }],
   "config": {
     "designWidth": 390,
     "logLevel": "debug"
