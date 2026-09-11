@@ -4,7 +4,9 @@
   "private": true,
   "description": "Redmi Watch 4 Vela JS ebook reader",
   "scripts": {
-    "build": "aiot build"
+    "build": "aiot build",
+    "inspect-bin": "node tools/inspect-bin.mjs",
+    "pack-book": "node tools/pack-book.mjs"
   },
   "devDependencies": {
     "aiot-toolkit": "2.0.5"

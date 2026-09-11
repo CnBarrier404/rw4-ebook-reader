@@ -6,11 +6,13 @@ The project has a minimal Vela JS application with a blank black entry page. The
 
 ## Commands
 
-| Action  | Command            |
-| :------ | :----------------- |
-| Install | `npm ci`           |
-| Build   | `npm run build`    |
-| Test    | Not configured yet |
+| Action                      | Command                                               |
+| :-------------------------- | :---------------------------------------------------- |
+| Install                     | `npm ci`                                              |
+| Build                       | `npm run build`                                       |
+| Inspect built-in BIN shell  | `npm run inspect-bin`                                 |
+| Pack TXT to installable BIN | `npm run pack-book -- --input <path> --output <path>` |
+| Test                       | Not configured                                        |
 
 Update this table when the application toolchain and validation commands are established. Do not assume commands from another Vela project apply to this repository.
 
@@ -20,6 +22,7 @@ Update this table when the application toolchain and validation commands are est
 | :-------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `docs/`   | Development research and supporting documentation; `research.md` records device capabilities, installation and book import mechanisms, sources, and unresolved questions |
 | `src/`    | Vela application entry, manifest, pages, and bundled resources                                                                                                           |
+| `tools/`  | Host-side utilities, including the TXT to watchface BIN packer                                                                                                           |
 
 Use `npm run build` to validate changes to the application skeleton. Build output is written to `build/` and `dist/` and is ignored by Git. Signing material under `sign/` must remain untracked. A successful build does not establish Redmi Watch 4 runtime compatibility.
 
