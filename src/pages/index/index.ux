@@ -8,7 +8,7 @@
     </div>
     <list class="book-list" if="{{books.length > 0}}">
       <list-item class="book-item" type="book" for="{{books}}">
-        <div class="book-card">
+        <div class="book-card" onclick="openBook($item)">
           <text class="book-title">{{$item.title}}</text>
         </div>
       </list-item>
@@ -22,12 +22,17 @@
 
 <script>
 import file from '@system.file'
+import router from '@system.router'
 
 export default {
   private: {
     books: [],
     statusText: '正在加载',
     loading: false
+  },
+
+  openBook(book) {
+    router.push({ uri: '/pages/reader', params: { uri: book.uri, title: book.title } })
   },
 
   onShow() {
@@ -47,7 +52,7 @@ export default {
             } catch (error) {
               // Keep the original filename if it contains a literal percent.
             }
-            return { title: name.replace(/\.txt$/i, '') }
+            return { uri: entry.uri, title: name.replace(/\.txt$/i, '') }
           })
         this.statusText = '暂无小说'
       },

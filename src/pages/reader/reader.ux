@@ -1,0 +1,317 @@
+<template>
+  <div class="page">
+    <div class="header">
+      <image class="indicator" src="/common/back.png" onclick="goBack"></image>
+      <text class="title">{{title}}</text>
+    </div>
+      <list id="reading" class="reading" onscroll="onScroll" onscrollend="onScrollEnd">
+        <list-item class="row" type="line" for="{{rows}}" tid="slot">
+          <text class="line">{{$item.text}}</text>
+        </list-item>
+    </list>
+    <div class="footer">
+      <text class="status" onclick="retry">{{status || progress}}</text>
+    </div>
+  </div>
+</template>
+
+<script>
+import file from '@system.file'
+import storage from '@system.storage'
+import router from '@system.router'
+import { READ_BYTES, ROW_HEIGHT, asBytes, detectFormat, windowStart, makeWindow, restoreOffset } from '../../common/reader-text'
+import { createProgressStore } from '../../common/reader-progress'
+
+const marks = createProgressStore(storage)
+const READ_RETRIES = 2
+const MAX_READ_PARTS = 8
+const READ_RETRY_DELAY = 20
+
+export default {
+  public: { uri: '', title: '' },
+  private: { rows: [], status: '正在加载', progress: '' },
+
+  onInit() {
+    this.dead = false
+    this.hidden = false
+    this.loading = false
+    this.rebasing = false
+    this.offset = 0
+    this.inset = 0
+    this.saved = -1
+    this.saving = -1
+    this.key = 'reader.v1:' + this.uri
+  },
+
+  onReady() { this.open() },
+  onShow() { this.hidden = false },
+  onHide() {
+    this.hidden = true
+    this.cancelSaveTimer()
+    this.save()
+  },
+  onDestroy() {
+    if (this.restoreTimer) clearTimeout(this.restoreTimer)
+    if (this.readRetryTimer) clearTimeout(this.readRetryTimer)
+    this.cancelSaveTimer()
+    this.save()
+    this.dead = true
+    this.rows = []
+  },
+  open() {
+    if (this.loading || this.dead) return
+    this.loading = true
+    this.status = '正在加载'
+    file.get({
+      uri: this.uri,
+      success: (meta) => {
+        if (this.dead) return
+        if (!meta.length) {
+          this.failure('书籍为空'); return
+        }
+        this.meta = meta
+        file.readArrayBuffer({
+          uri: this.uri, position: 0, length: Math.min(3, meta.length),
+          success: (data) => {
+            if (this.dead) return
+            const format = detectFormat(asBytes(data.buffer))
+            meta.encoding = format.encoding
+            meta.dataStart = format.dataStart
+            if (meta.length === meta.dataStart) {
+              this.failure('书籍为空'); return
+            }
+            if (meta.encoding !== 'utf-8' && (meta.length - meta.dataStart) % 2) {
+              this.failure('UTF-16 文件不完整'); return
+            }
+            marks.get(this.key, (value) => {
+              if (this.dead) return
+              this.offset = restoreOffset(value, meta)
+              this.loading = false
+              this.loadWindow()
+            })
+          },
+          fail: () => this.failure('读取失败，点此重试')
+        })
+      },
+      fail: () => this.failure('书籍不存在或无法读取，点此重试')
+    })
+  },
+
+  failure(message) {
+    if (this.dead) return
+    this.loading = false
+    this.rebasing = false
+    this.status = message
+  },
+
+  applyWindow(nextRows) {
+    // Keep the list's item identities stable across normal window changes.
+    // Replacing 88 new objects makes the native list diff and relayout the
+    // whole window at once. The slot id lets Vela reuse the same list-item
+    // nodes while only the line values change.
+    if (this.rows.length === nextRows.length && this.rows.length > 0) {
+      for (let i = 0; i < nextRows.length; i++) {
+        const current = this.rows[i]
+        const next = nextRows[i]
+        current.text = next.text
+        current.offset = next.offset
+        current.end = next.end
+        current.slot = i
+      }
+      // Reassign a shallow array copy to notify the template while retaining
+      // every row object and its stable tid.
+      this.rows = this.rows.slice()
+      return true
+    }
+    this.rows = nextRows.map((row, i) => ({
+      text: row.text, offset: row.offset, end: row.end, slot: i
+    }))
+    return false
+  },
+
+  retry() {
+    if (!this.rows.length) this.open()
+    else { this.save(); this.loadWindow() }
+  },
+
+  goBack() {
+    this.save()
+    router.back()
+  },
+
+  readWindow(position, length, done, failed) {
+    if (!Number.isFinite(length) || length <= 0) {
+      failed(Error('empty read'))
+      return
+    }
+    const target = new Uint8Array(length)
+    let filled = 0
+    let parts = 0
+    let retries = 0
+    const retry = (data, code) => {
+      if (retries < READ_RETRIES) {
+        retries++
+        this.readRetryTimer = setTimeout(() => {
+          this.readRetryTimer = 0
+          request()
+        }, READ_RETRY_DELAY)
+      } else failed(data || Error('read failed'), code)
+    }
+    const request = () => {
+      if (this.dead) return
+      const remaining = length - filled
+      parts++
+      file.readArrayBuffer({
+        uri: this.uri, position: position + filled, length: remaining,
+        success: (data) => {
+          if (this.dead) return
+          let bytes
+          try {
+            bytes = asBytes(data && data.buffer ? data.buffer : new Uint8Array(0))
+          } catch (error) {
+            retry(error)
+            return
+          }
+          if (!bytes.length) {
+            retry(Error('empty read'))
+            return
+          }
+          const count = Math.min(bytes.length, remaining)
+          target.set(bytes.subarray(0, count), filled)
+          filled += count
+          retries = 0
+          if (filled >= length) {
+            done(target)
+          } else if (parts < MAX_READ_PARTS) {
+            request()
+          } else {
+            failed(Error('short read'))
+          }
+        },
+        fail: (data, code) => retry(data, code)
+      })
+    }
+    request()
+  },
+
+  loadWindow() {
+    if (this.loading || this.dead) return
+    this.loading = true
+    const anchor = this.offset
+    const start = windowStart(anchor, this.meta)
+    const length = Math.min(READ_BYTES, this.meta.length - start)
+    this.readWindow(start, length, (bytes) => {
+        if (this.dead) return
+        this.loading = false
+        // Input can continue while I/O is in flight. Never restore an old anchor.
+        if (this.offset !== anchor) { this.loadWindow(); return }
+        try {
+          const window = makeWindow(bytes, start, anchor, this.meta.length, this.meta)
+          const previousIndex = this.rowIndex
+          this.rebasing = true
+          this.rowIndex = window.index
+          const reusedRows = this.applyWindow(window.rows)
+          this.status = ''
+          this.updateProgress()
+          this.$nextTick(() => {
+            if (this.dead) return
+            try {
+              const list = this.$element('reading')
+              if (reusedRows && Number.isFinite(previousIndex)) {
+                // A same-sized window keeps every fixed-height list item in
+                // place. Adjust the existing scroll position once instead of
+                // resolving an item index and then issuing a second scroll.
+                list.scrollBy({
+                  top: (window.index - previousIndex) * ROW_HEIGHT,
+                  behavior: 'instant'
+                })
+              } else {
+                list.scrollTo({ index: window.index, behavior: 'instant' })
+                if (this.inset) list.scrollBy({ top: this.inset, behavior: 'instant' })
+              }
+              // Do not enqueue another native nextTick from its own callback:
+              // older Vela runtimes can invalidate the callback queue while
+              // iterating it and crash in __uv_prepare_cb / js_free_shape.
+              this.restoreTimer = setTimeout(() => {
+                this.restoreTimer = 0
+                this.rebasing = false
+              }, 0)
+            } catch (error) {
+              this.rebasing = false
+              this.failure('设备不支持阅读定位')
+            }
+          })
+        } catch (error) {
+          this.failure(error.code === 'TEXT_ENCODING' ? error.message : '正文读取失败，点此重试')
+        }
+      }, (error, code) => {
+        if (this.dead) return
+        this.loading = false
+        if (this.offset !== anchor) { this.loadWindow(); return }
+        console.error('Reader window failed', this.uri, start, length, code || error)
+        this.failure('正文读取失败，点此重试')
+      })
+  },
+
+  onScroll(event) {
+    if (this.rebasing || this.dead || !this.rows.length || !Number.isFinite(event.scrollY)) return
+    const y = Math.max(0, event.scrollY)
+    this.rowIndex = Math.min(this.rows.length - 1, Math.floor(y / ROW_HEIGHT))
+    this.offset = this.rows[this.rowIndex].offset
+    this.inset = y % ROW_HEIGHT
+    // Defer storage I/O until scrolling has been idle. A periodic write during
+    // a long gesture can interrupt the native list even though the payload is
+    // small; lifecycle handlers still flush immediately when leaving.
+    if (!this.hidden) {
+      this.cancelSaveTimer()
+      this.saveTimer = setTimeout(() => { this.saveTimer = 0; this.save() }, 1500)
+    }
+  },
+
+  onScrollEnd() {
+    if (this.rebasing || this.dead || !this.rows.length) return
+    this.updateProgress()
+    const index = this.rowIndex || 0
+    if ((index < 12 && this.rows[0].offset > this.meta.dataStart) ||
+        (index > this.rows.length - 24 && this.rows[this.rows.length - 1].end < this.meta.length)) {
+      this.loadWindow()
+    }
+  },
+
+  updateProgress() {
+    this.progress = Math.floor(100 * (this.offset - this.meta.dataStart) / (this.meta.length - this.meta.dataStart)) + '%'
+  },
+  cancelSaveTimer() {
+    if (this.saveTimer) clearTimeout(this.saveTimer)
+    this.saveTimer = 0
+  },
+  save() {
+    if (!this.meta || !this.meta.encoding || !Number.isFinite(this.meta.dataStart) ||
+        !Number.isFinite(this.offset) || this.offset < this.meta.dataStart ||
+        this.offset >= this.meta.length || this.saving === this.offset ||
+        (this.saved === this.offset && this.saving < 0)) return
+    const offset = this.offset
+    this.saving = offset
+    marks.set(this.key, JSON.stringify({
+      version: 2, encoding: this.meta.encoding, dataStart: this.meta.dataStart,
+      length: this.meta.length, modified: this.meta.lastModifiedTime, offset
+    }), (ok) => {
+      if (this.saving === offset) this.saving = -1
+      if (ok) this.saved = offset
+      if (!this.dead) this.status = ok ? '' : '进度保存失败，点此重试'
+    })
+  }
+}
+</script>
+
+<style>
+.page { width: 100%; height: 100%; padding: 8px; flex-direction: column; background-color: #000000; }
+.header { height: 56px; width: 100%; padding: 0px 30px; align-items: center; flex-shrink: 0; }
+.indicator { width: 30px; height: 30px; margin-right: 4px; flex-shrink: 0; }
+.title { flex: 1; font-size: 22px; color: #929292; text-align: center; lines: 1; text-overflow: ellipsis; }
+.reading { width: 100%; height: 322px; flex-shrink: 1; }
+.row { width: 100%; height: 40px; padding: 0px 16px; align-items: center; }
+.line { width: 100%; font-size: 20px; line-height: 40px; color: #dedede; lines: 1; }
+.footer { width: 100%; height: 56px; padding: 0px 30px; flex-shrink: 0; align-items: center; }
+.status { width: 100%; height: 56px; line-height: 56px; font-size: 18px; color: #929292; text-align: center; lines: 1; }
+</style>

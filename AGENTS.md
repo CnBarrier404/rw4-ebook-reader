@@ -2,7 +2,7 @@
 
 rw4-ebook-reader is an ebook reader project targeting Redmi Watch 4 using Xiaomi Vela JS quick applications.
 
-The Vela JS application lists imported TXT filenames on its black home page using `internal://mass/`. The application name is `电子书` and its package is `com.cnbarrier.ebook`. There is no reader or bundled novel; list items have no click action. The mapping to the BIN installer's physical directory still needs Watch 4 verification. Watch 4 crown input remains unverified; do not invent a rotary event or claim simulator scrolling proves hardware support.
+The Vela JS application lists imported TXT filenames on its black home page using `internal://mass/`. The application name is `电子书` and its package is `com.cnbarrier.ebook`. Tapping a book opens a bounded-memory UTF-8 / BOM-marked UTF-16 reader with per-book progress; there is no bundled novel. See `docs/reader.md` for format, memory bounds, and verification. The mapping to the BIN installer's physical directory still needs Watch 4 verification. Watch 4 crown input remains unverified; do not invent a rotary event or claim simulator scrolling proves hardware support.
 
 ## Commands
 
@@ -12,7 +12,6 @@ The Vela JS application lists imported TXT filenames on its black home page usin
 | Build                       | `npm run build`                                       |
 | Inspect built-in BIN shell  | `npm run inspect-bin`                                 |
 | Pack TXT to installable BIN | `npm run pack-book -- --input <path> --output <path>` |
-| Test                       | Not configured                                        |
 
 Update this table when the application toolchain and validation commands are established. Do not assume commands from another Vela project apply to this repository.
 
