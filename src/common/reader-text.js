@@ -42,12 +42,14 @@ function encodingError() {
 
 // Decode a single code point, retaining byte positions. No whole-file string,
 // TextDecoder, encoding tables, or Node dependency on the watch.
+// Return (code << 3) | width (width is 1..4), or 0 for no complete point.
+// The largest Unicode value fits safely in a signed 32-bit packed integer.
 function decoder(bytes, encoding, eof) {
   const unit = encoding === 'utf-16be' ?
     (i) => (bytes[i] << 8) | bytes[i + 1] : (i) => bytes[i] | (bytes[i + 1] << 8)
-  const incomplete = () => { if (eof) throw encodingError(); return null }
+  const incomplete = () => { if (eof) throw encodingError(); return 0 }
   return (i) => {
-    if (i >= bytes.length) return null
+    if (i >= bytes.length) return 0
     let code = bytes[i]
     let width = 1
     if (encoding === 'utf-8') {
@@ -76,7 +78,7 @@ function decoder(bytes, encoding, eof) {
       } else if (code >= 0xdc00 && code <= 0xdfff) throw encodingError()
     }
     if ((code < 32 && code !== 9 && code !== 10 && code !== 13) || code === 127) throw encodingError()
-    return { code, width }
+    return (code << 3) | width
   }
 }
 
@@ -95,50 +97,53 @@ export function makeWindow(bytes, start, anchor, size, format = { encoding: 'utf
       if (first >= 0xdc00 && first <= 0xdfff) i += 2
     }
   }
-  let text = ''
+  // Reuse numeric UTF-16 units; materialize one string per emitted row.
+  // At most 17 code points / 34 units, including supplementary characters.
+  const units = []
   let count = 0
   let offset = start + i
   let anchorIndex = -1
   const emit = (end) => {
     if (offset === anchor) anchorIndex = rows.length
-    rows.push({ text: text || ' ', offset, end })
+    rows.push({ text: count ? String.fromCharCode.apply(null, units) : ' ', offset, end })
     if (end <= anchor && rows.length > BEFORE_ROWS) rows.shift()
-    text = ''
+    units.length = 0
     count = 0
     offset = end
   }
   while (i < bytes.length) {
-    if (start + i === anchor && text) emit(anchor)
+    if (start + i === anchor && count) emit(anchor)
     const point = read(i)
     if (!point) break
-    const { code, width } = point
+    const code = point >>> 3
+    const width = point & 7
     if (code === 13 || code === 10) {
-      const next = code === 13 ? read(i + width) : null
+      const next = code === 13 ? read(i + width) : 0
       if (code === 13 && !next && !eof) break
       i += width
-      if (next && next.code === 10) i += next.width
+      if (next && (next >>> 3) === 10) i += next & 7
       emit(start + i)
     } else {
-      text += code === 9 ? ' ' : code <= 65535 ? String.fromCharCode(code) :
-        String.fromCharCode(0xd800 + ((code - 65536) >> 10), 0xdc00 + ((code - 65536) & 1023))
+      if (code <= 65535) units.push(code === 9 ? 32 : code)
+      else units.push(0xd800 + ((code - 65536) >> 10), 0xdc00 + ((code - 65536) & 1023))
       i += width
       count++
       if (count === CHARS_PER_ROW) {
         // Consume a following newline with the full row, not as a blank row.
         const next = read(i)
         if (!next && !eof) break
-        if (next && next.code === 13) {
-          const after = read(i + next.width)
+        if (next && (next >>> 3) === 13) {
+          const after = read(i + (next & 7))
           if (!after && !eof) break
-          i += next.width
-          if (after && after.code === 10) i += after.width
-        } else if (next && next.code === 10) i += next.width
+          i += next & 7
+          if (after && (after >>> 3) === 10) i += after & 7
+        } else if (next && (next >>> 3) === 10) i += next & 7
         emit(start + i)
       }
     }
     if (anchorIndex >= 0 && rows.length - anchorIndex >= AFTER_ROWS) break
   }
-  if (text && start + i === size) emit(size)
+  if (count && start + i === size) emit(size)
   if (!rows.length) return { rows: [], index: 0 }
   const index = rows.findIndex((row) => row.offset === anchor)
   if (index < 0) throw Error('阅读位置无效')
