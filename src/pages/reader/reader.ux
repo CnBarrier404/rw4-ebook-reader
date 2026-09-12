@@ -10,7 +10,7 @@
         </list-item>
     </list>
     <div class="footer">
-      <text class="status" onclick="retry">{{status || progress}}</text>
+      <text class="status" onclick="retry">{{status || saveError || progress}}</text>
     </div>
   </div>
 </template>
@@ -26,10 +26,11 @@ const marks = createProgressStore(storage)
 const READ_RETRIES = 2
 const MAX_READ_PARTS = 8
 const READ_RETRY_DELAY = 20
+const SAVE_INTERVAL = 60000
 
 export default {
   public: { uri: '', title: '' },
-  private: { rows: [], status: '正在加载', progress: '' },
+  private: { rows: [], status: '正在加载', saveError: '', progress: '' },
 
   onInit() {
     this.dead = false
@@ -40,22 +41,31 @@ export default {
     this.inset = 0
     this.saved = -1
     this.saving = -1
+    this.progressReady = false
+    this.scrolling = false
+    this.saveSequence = 0
+    this.saveTimer = 0
+    this.nextSaveAt = Date.now() + SAVE_INTERVAL
     this.key = 'reader.v1:' + this.uri
   },
 
   onReady() { this.open() },
-  onShow() { this.hidden = false },
+  onShow() {
+    this.hidden = false
+    this.scrolling = false
+    this.scheduleSave()
+  },
   onHide() {
     this.hidden = true
     this.cancelSaveTimer()
     this.save()
   },
   onDestroy() {
+    this.dead = true
     if (this.restoreTimer) clearTimeout(this.restoreTimer)
     if (this.readRetryTimer) clearTimeout(this.readRetryTimer)
     this.cancelSaveTimer()
     this.save()
-    this.dead = true
     this.rows = []
   },
   open() {
@@ -83,9 +93,12 @@ export default {
             if (meta.encoding !== 'utf-8' && (meta.length - meta.dataStart) % 2) {
               this.failure('UTF-16 文件不完整'); return
             }
-            marks.get(this.key, (value) => {
+            marks.get(this.key, (value, persisted) => {
               if (this.dead) return
               this.offset = restoreOffset(value, meta)
+              this.saved = persisted ? this.offset : -1
+              this.progressReady = true
+              this.nextSaveAt = Date.now() + SAVE_INTERVAL
               this.loading = false
               this.loadWindow()
             })
@@ -130,6 +143,7 @@ export default {
   },
 
   retry() {
+    if (this.saveError) { this.save(); return }
     if (!this.rows.length) this.open()
     else { this.save(); this.loadWindow() }
   },
@@ -259,17 +273,14 @@ export default {
     this.rowIndex = Math.min(this.rows.length - 1, Math.floor(y / ROW_HEIGHT))
     this.offset = this.rows[this.rowIndex].offset
     this.inset = y % ROW_HEIGHT
-    // Defer storage I/O until scrolling has been idle. A periodic write during
-    // a long gesture can interrupt the native list even though the payload is
-    // small; lifecycle handlers still flush immediately when leaving.
-    if (!this.hidden) {
-      this.cancelSaveTimer()
-      this.saveTimer = setTimeout(() => { this.saveTimer = 0; this.save() }, 1500)
-    }
+    this.scrolling = true
+    this.scheduleSave()
   },
 
   onScrollEnd() {
     if (this.rebasing || this.dead || !this.rows.length) return
+    this.scrolling = false
+    this.scheduleSave()
     this.updateProgress()
     const index = this.rowIndex || 0
     if ((index < 12 && this.rows[0].offset > this.meta.dataStart) ||
@@ -285,20 +296,41 @@ export default {
     if (this.saveTimer) clearTimeout(this.saveTimer)
     this.saveTimer = 0
   },
+  scheduleSave() {
+    if (this.dead || this.hidden || !this.progressReady || this.saveTimer ||
+        this.saving >= 0 || this.offset === this.saved) return
+    const delay = this.nextSaveAt - Date.now()
+    if (delay <= 0) {
+      // An expired checkpoint waits for scrollend; never poll during a gesture.
+      if (!this.scrolling) this.save()
+      return
+    }
+    this.saveTimer = setTimeout(() => {
+      this.saveTimer = 0
+      this.scheduleSave()
+    }, delay)
+  },
   save() {
-    if (!this.meta || !this.meta.encoding || !Number.isFinite(this.meta.dataStart) ||
+    if (!this.progressReady || !this.meta || !this.meta.encoding || !Number.isFinite(this.meta.dataStart) ||
         !Number.isFinite(this.offset) || this.offset < this.meta.dataStart ||
         this.offset >= this.meta.length || this.saving === this.offset ||
         (this.saved === this.offset && this.saving < 0)) return
     const offset = this.offset
+    const sequence = ++this.saveSequence
+    this.cancelSaveTimer()
     this.saving = offset
     marks.set(this.key, JSON.stringify({
       version: 2, encoding: this.meta.encoding, dataStart: this.meta.dataStart,
       length: this.meta.length, modified: this.meta.lastModifiedTime, offset
     }), (ok) => {
-      if (this.saving === offset) this.saving = -1
+      // A lifecycle flush may have queued a newer position during this write.
+      if (sequence !== this.saveSequence) return
+      this.saving = -1
       if (ok) this.saved = offset
-      if (!this.dead) this.status = ok ? '' : '进度保存失败，点此重试'
+      // Failed writes also wait a full interval before automatic retry.
+      this.nextSaveAt = Date.now() + SAVE_INTERVAL
+      if (!this.dead) this.saveError = ok ? '' : '进度保存失败，点此重试'
+      this.scheduleSave()
     })
   }
 }

@@ -22,8 +22,8 @@ export function createProgressStore(storage) {
   }
   return {
     get(key, done) {
-      if (pending[key]) { done(pending[key].value); return }
-      storage.get({ key, success: done, fail: () => done('') })
+      if (pending[key]) { done(pending[key].value, false); return }
+      storage.get({ key, success: (value) => done(value, !!value), fail: () => done('', false) })
     },
     set(key, value, done) {
       pending[key] = { value, done }
