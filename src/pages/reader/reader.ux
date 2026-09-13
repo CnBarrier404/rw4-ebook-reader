@@ -4,11 +4,25 @@
       <image class="back" src="/common/back.png" onclick="goBack"></image>
       <text class="title">{{title}}</text>
     </div>
-    <div class="reading" onswipe="onSwipe">
+    <div class="reading" if="{{!jumpVisible}}" onswipe="onSwipe">
       <text class="line" for="{{lines}}" onswipe="onSwipe">{{$item}}</text>
     </div>
-    <div class="footer" onclick="retry">
+    <div class="footer" if="{{!jumpVisible}}" onclick="onFooter">
       <text class="status">{{status || saveError || progress}}</text>
+    </div>
+    <div class="jump-panel" if="{{jumpVisible}}">
+      <text class="jump-label">跳转阅读进度</text>
+      <text class="jump-value">{{jumpPercent}}%</text>
+      <div class="jump-row">
+        <div class="jump-step" onclick="adjustJump(-10)"><text class="jump-button-text">−10%</text></div>
+        <div class="jump-step" onclick="adjustJump(-1)"><text class="jump-button-text">−1%</text></div>
+        <div class="jump-step" onclick="adjustJump(1)"><text class="jump-button-text">+1%</text></div>
+        <div class="jump-step" onclick="adjustJump(10)"><text class="jump-button-text">+10%</text></div>
+      </div>
+      <div class="jump-row">
+        <div class="jump-action" onclick="cancelJump"><text class="jump-button-text">取消</text></div>
+        <div class="jump-action" onclick="confirmJump"><text class="jump-button-text">跳转</text></div>
+      </div>
     </div>
   </div>
 </template>
@@ -19,13 +33,15 @@ import router from '@system.router'
 import { asBytes, detectFormat, restoreOffset } from '../../common/reader-text'
 import { PAGE_BYTES, makePage, previousStart } from '../../common/reader-pages'
 import { marks } from '../../common/book-marks'
+import { seekStart } from '../../common/reader-seek'
 
 const SAVE_INTERVAL = 60000
 const HISTORY_LIMIT = 64
 
 export default {
   public: { uri: '', title: '' },
-  private: { lines: [' ', ' ', ' ', ' ', ' ', ' ', ' ', ' '], status: '正在加载', saveError: '', progress: '' },
+  private: { lines: [' ', ' ', ' ', ' ', ' ', ' ', ' ', ' '], status: '正在加载', saveError: '', progress: '',
+    jumpVisible: false, jumpPercent: 0 },
   onInit() {
     this.dead = false
     this.hidden = false
@@ -115,7 +131,7 @@ export default {
     request()
   },
   onSwipe(event) {
-    if (this.dead || this.hidden || this.loading || !this.current) return
+    if (this.dead || this.hidden || this.loading || this.jumpVisible || !this.current) return
     if (event.direction === 'up') {
       if (this.current.end >= this.meta.length) { this.status = '已到书尾'; return }
       const known = this.history[this.cursor + 1]
@@ -132,13 +148,13 @@ export default {
     if (this.dead || this.loading) return
     this.loading = true
     this.failedTarget = target
-    const cached = target.mode !== 'previous' && this.cache.find((page) =>
+    const cached = target.mode !== 'previous' && !target.tail && this.cache.find((page) =>
       page.start === target.start && (!target.end || page.end === target.end))
     if (cached) { this.commitPage(cached, target.mode); return }
     const end = target.end || this.meta.length
     this.readBytes(target.start, Math.min(PAGE_BYTES, end - target.start), (bytes) => {
       try {
-        const page = makePage(bytes, target.start, end, this.meta, target.mode === 'previous')
+        const page = makePage(bytes, target.start, end, this.meta, target.mode === 'previous' || target.tail)
         this.commitPage(page, target.mode)
       } catch (error) {
         this.failure(error.code === 'TEXT_ENCODING' ? error.message : '分页失败，点此重试')
@@ -151,7 +167,7 @@ export default {
     while (lines.length < 8) lines.push(' ')
     this.lines = lines
     const range = { start: page.start, end: page.end }
-    if (mode === 'open') { this.history = [range]; this.cursor = 0 }
+    if (mode === 'open' || mode === 'jump') { this.history = [range]; this.cursor = 0; this.cache = [] }
     else if (mode === 'back') this.cursor--
     else if (mode === 'previous') {
       this.history.unshift(range)
@@ -173,6 +189,7 @@ export default {
     this.progress = (100 * (page.start - this.meta.dataStart) /
       (this.meta.length - this.meta.dataStart)).toFixed(2) + '%'
     this.scheduleSave()
+    if (mode === 'jump') this.save()
   },
   failure(message) {
     if (this.dead) return
@@ -181,11 +198,48 @@ export default {
   },
   retry() {
     if (this.loading || this.dead) return
-    if (this.failedTarget) this.loadPage(this.failedTarget)
+    if (this.failedTarget && this.failedTarget.mode === 'seek') this.jumpTo(this.failedTarget.percent)
+    else if (this.failedTarget) this.loadPage(this.failedTarget)
     else if (!this.current) this.open()
     else if (this.saveError) this.save()
   },
-  goBack() { this.save(); router.back() },
+  onFooter() {
+    if (this.dead || this.hidden || this.loading) return
+    if (this.failedTarget || !this.current || this.saveError) { this.retry(); return }
+    this.jumpPercent = Math.round(100 * (this.offset - this.meta.dataStart) /
+      (this.meta.length - this.meta.dataStart))
+    this.jumpVisible = true
+  },
+  adjustJump(amount) { this.jumpPercent = Math.max(0, Math.min(100, this.jumpPercent + amount)) },
+  cancelJump() { this.jumpVisible = false },
+  confirmJump() {
+    if (this.dead || this.hidden || this.loading || !this.current) return
+    this.jumpVisible = false
+    this.jumpTo(this.jumpPercent)
+  },
+  jumpTo(percent) {
+    if (this.dead || this.loading || !this.current) return
+    this.status = '正在跳转'
+    if (percent === 100) {
+      this.loadPage({ start: previousStart(this.meta.length, this.meta), end: this.meta.length, mode: 'jump', tail: true })
+      return
+    }
+    const meta = this.meta
+    let target = meta.dataStart + Math.floor((meta.length - meta.dataStart) * percent / 100)
+    if (meta.encoding !== 'utf-8') target -= (target - meta.dataStart) % 2
+    const probeStart = Math.max(meta.dataStart, target - 4)
+    this.loading = true
+    this.failedTarget = { mode: 'seek', percent }
+    this.readBytes(probeStart, Math.min(8, meta.length - probeStart), (bytes) => {
+      const start = seekStart(bytes, probeStart, target, meta)
+      this.loading = false
+      this.loadPage({ start, mode: 'jump' })
+    }, () => this.failure('跳转失败，点此重试'))
+  },
+  goBack() {
+    if (this.jumpVisible) { this.cancelJump(); return }
+    this.save(); router.back()
+  },
   scheduleSave() {
     if (this.dead || this.hidden || !this.current || this.saveTimer || this.saving >= 0 || this.saved === this.offset) return
     const delay = this.nextSaveAt - Date.now()
@@ -221,4 +275,11 @@ export default {
 .line { width: 100%; height: 40px; line-height: 40px; font-size: 20px; color: #dedede; lines: 1; flex-shrink: 0; }
 .footer { width: 100%; height: 58px; padding: 0px 24px; align-items: center; flex-shrink: 0; }
 .status { width: 100%; font-size: 16px; line-height: 22px; color: #929292; text-align: center; lines: 2; }
+.jump-panel { width: 100%; height: 378px; padding: 16px 12px; flex-direction: column; align-items: center; flex-shrink: 0; }
+.jump-label { width: 100%; height: 40px; font-size: 24px; color: #dedede; text-align: center; }
+.jump-value { width: 100%; height: 80px; font-size: 40px; color: #f5f5f5; text-align: center; }
+.jump-row { width: 100%; height: 72px; justify-content: space-between; align-items: center; flex-shrink: 0; }
+.jump-step { width: 80px; height: 56px; background-color: #262629; border-radius: 16px; align-items: center; justify-content: center; }
+.jump-action { width: 166px; height: 56px; background-color: #262629; border-radius: 16px; align-items: center; justify-content: center; }
+.jump-button-text { font-size: 22px; color: #f5f5f5; lines: 1; }
 </style>
