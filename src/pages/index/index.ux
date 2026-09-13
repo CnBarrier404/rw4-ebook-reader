@@ -7,9 +7,10 @@
       </div>
     </div>
     <list class="book-list" if="{{books.length > 0}}">
-      <list-item class="book-item" type="book" for="{{books}}">
-        <div class="book-card" onclick="openBook($item)">
-          <text class="book-title">{{$item.title}}</text>
+      <list-item class="book-item" type="book" for="{{books}}" style="height: {{$item.itemHeight}}px;">
+        <div class="book-card" style="height: {{$item.cardHeight}}px;" onclick="openBook($item)">
+          <text class="book-title" style="height: {{$item.titleHeight}}px;">{{$item.displayTitle}}</text>
+          <text class="book-progress">{{$item.progress}}</text>
         </div>
       </list-item>
     </list>
@@ -23,6 +24,8 @@
 <script>
 import file from '@system.file'
 import router from '@system.router'
+import { marks } from '../../common/book-marks'
+import { restoreOffset } from '../../common/reader-text'
 
 export default {
   private: {
@@ -36,6 +39,7 @@ export default {
   },
 
   onShow() {
+    this.active = true
     if (this.loading) return
     this.loading = true
     file.list({
@@ -52,9 +56,18 @@ export default {
             } catch (error) {
               // Keep the original filename if it contains a literal percent.
             }
-            return { uri: entry.uri, title: name.replace(/\.txt$/i, '') }
+            const title = name.replace(/\.txt$/i, '')
+            // Explicit rows and heights avoid depending on list-item auto measurement.
+            const points = Array.from(title.replace(/[\r\n\t]/g, ' '))
+            const rows = []
+            for (let i = 0; i < points.length; i += 10) rows.push(points.slice(i, i + 10).join(''))
+            const titleHeight = Math.max(1, rows.length) * 36
+            const cardHeight = titleHeight + 60
+            return { uri: entry.uri, title, displayTitle: rows.join('\n'), titleHeight,
+              cardHeight, itemHeight: cardHeight + 10, progress: '正在读取进度' }
           })
         this.statusText = '暂无小说'
+        this.loadProgress(this.books, 0)
       },
       fail: (data, code) => {
         this.books = []
@@ -64,6 +77,47 @@ export default {
       complete: () => {
         this.loading = false
       }
+    })
+  },
+
+  onHide() { this.active = false },
+  onDestroy() { this.active = false },
+
+  loadProgress(books, index) {
+    if (!this.active || this.books !== books || index >= books.length) return
+    const book = books[index]
+    const finish = (progress) => {
+      if (!this.active || this.books !== books) return
+      book.progress = progress
+      this.loadProgress(books, index + 1)
+    }
+    // Read metadata and one saved record at a time; never load book contents.
+    file.get({
+      uri: book.uri,
+      success: (meta) => {
+        if (!this.active || this.books !== books) return
+        marks.get('reader.v1:' + book.uri, (value) => {
+          let progress = '未读 · 0.00%'
+          try {
+            const mark = JSON.parse(value)
+            meta.encoding = mark.version === 1 ? 'utf-16le' : mark.encoding
+            meta.dataStart = mark.version === 1 ? 2 : mark.dataStart
+            const validFormat = meta.encoding === 'utf-8' && (meta.dataStart === 0 || meta.dataStart === 3) ||
+              (meta.encoding === 'utf-16le' || meta.encoding === 'utf-16be') && meta.dataStart === 2
+            if (validFormat && meta.length > meta.dataStart) {
+              const offset = restoreOffset(value, meta)
+              if (offset > meta.dataStart || mark.offset === meta.dataStart &&
+                  mark.length === meta.length && mark.modified === meta.lastModifiedTime &&
+                  (mark.version === 1 || mark.version === 2)) {
+                progress = '已读 ' + (100 * (offset - meta.dataStart) /
+                  (meta.length - meta.dataStart)).toFixed(2) + '%'
+              }
+            }
+          } catch (error) { /* Missing or damaged records display as unread. */ }
+          finish(progress)
+        })
+      },
+      fail: () => finish('进度读取失败')
     })
   }
 }
@@ -129,19 +183,31 @@ export default {
 .book-card {
   width: 100%;
   height: 96px;
-  padding: 0px 22px;
+  padding: 16px 22px;
   border-radius: 22px;
   background-color: #262629;
-  align-items: center;
+  flex-direction: column;
+  justify-content: center;
 }
 
 .book-title {
   width: 100%;
   color: #f5f5f5;
   font-size: 28px;
+  line-height: 36px;
   font-weight: normal;
-  lines: 2;
-  text-overflow: ellipsis;
+  flex-shrink: 0;
+}
+
+.book-progress {
+  width: 100%;
+  height: 24px;
+  line-height: 24px;
+  margin-top: 4px;
+  color: #929292;
+  font-size: 20px;
+  lines: 1;
+  flex-shrink: 0;
 }
 
 .empty-text {

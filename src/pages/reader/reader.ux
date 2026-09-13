@@ -15,13 +15,11 @@
 
 <script>
 import file from '@system.file'
-import storage from '@system.storage'
 import router from '@system.router'
 import { asBytes, detectFormat, restoreOffset } from '../../common/reader-text'
 import { PAGE_BYTES, makePage, previousStart } from '../../common/reader-pages'
-import { createProgressStore } from '../../common/reader-progress'
+import { marks } from '../../common/book-marks'
 
-const marks = createProgressStore(storage)
 const SAVE_INTERVAL = 60000
 const HISTORY_LIMIT = 64
 
