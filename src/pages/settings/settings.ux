@@ -6,39 +6,65 @@
     </div>
     <div class="setting">
       <text class="label">阅读时保持亮屏</text>
-      <switch class="toggle" if="{{!loading && !saving}}" checked="{{keepScreenOn}}" onchange="onKeepScreenOnChange"></switch>
-      <text class="value" if="{{loading || saving}}">{{loading ? '读取中' : '保存中'}}</text>
+      <switch class="toggle" if="{{!loading && !savingKeep}}" checked="{{keepScreenOn}}" onchange="onKeepScreenOnChange"></switch>
+      <text class="value" if="{{loading || savingKeep}}">{{loading ? '读取中' : '保存中'}}</text>
     </div>
-    <text class="hint">仅在阅读页保持亮屏，退出阅读后取消。开启会增加耗电。</text>
+    <div class="setting">
+      <text class="label">阅读时锁定亮度</text>
+      <switch class="toggle" if="{{!loading && !savingLock}}" checked="{{lockBrightness}}" onchange="onLockBrightnessChange"></switch>
+      <text class="value" if="{{loading || savingLock}}">{{loading ? '读取中' : '保存中'}}</text>
+    </div>
+    <text class="hint">两项设置只在阅读页生效，退出阅读后恢复。保持亮屏会增加耗电。</text>
     <text class="error" if="{{error}}">{{error}}</text>
   </div>
 </template>
 
 <script>
 import router from '@system.router'
-import { getKeepScreenOn, saveKeepScreenOn } from '../../common/reader-settings'
+import { getKeepScreenOn, saveKeepScreenOn, getLockBrightness, saveLockBrightness } from '../../common/reader-settings'
 
 export default {
-  private: { keepScreenOn: false, loading: true, saving: false, error: '' },
+  private: { keepScreenOn: false, lockBrightness: false, loading: true, savingKeep: false, savingLock: false, error: '' },
   onInit() {
     this.dead = false
+    this.pendingReads = 2
     getKeepScreenOn((enabled) => {
-      if (this.dead) return
       this.keepScreenOn = enabled
-      this.loading = false
+      this.readDone()
     })
+    getLockBrightness((enabled) => {
+      this.lockBrightness = enabled
+      this.readDone()
+    })
+  },
+  readDone() {
+    if (this.dead || --this.pendingReads) return
+    this.loading = false
   },
   onDestroy() { this.dead = true },
   onKeepScreenOnChange(event) {
-    if (this.loading || this.saving || this.dead) return
+    if (this.loading || this.savingKeep || this.dead) return
     const enabled = event.checked
     if (typeof enabled !== 'boolean' || enabled === this.keepScreenOn) return
-    this.saving = true
+    this.savingKeep = true
     this.error = ''
     saveKeepScreenOn(enabled, (ok) => {
       if (this.dead) return
-      this.saving = false
+      this.savingKeep = false
       if (ok) this.keepScreenOn = enabled
+      else this.error = '保存失败，请重新切换开关'
+    })
+  },
+  onLockBrightnessChange(event) {
+    if (this.loading || this.savingLock || this.dead) return
+    const enabled = event.checked
+    if (typeof enabled !== 'boolean' || enabled === this.lockBrightness) return
+    this.savingLock = true
+    this.error = ''
+    saveLockBrightness(enabled, (ok) => {
+      if (this.dead) return
+      this.savingLock = false
+      if (ok) this.lockBrightness = enabled
       else this.error = '保存失败，请重新切换开关'
     })
   },

@@ -7,8 +7,8 @@
       <text class="back header-text" onclick="goBack">&lt;</text>
       <text class="title header-text">{{title}}</text>
     </div>
-    <div class="footer" if="{{!jumpVisible && (controlsVisible || status || saveError || screenError)}}" onclick="onFooter">
-      <text class="status">{{status || saveError || screenError || progress}}</text>
+    <div class="footer" if="{{!jumpVisible && (controlsVisible || status || saveError || screenError || brightnessError)}}" onclick="onFooter">
+      <text class="status">{{status || saveError || screenError || brightnessError || progress}}</text>
     </div>
     <div class="jump-panel" if="{{jumpVisible}}">
       <text class="jump-label">跳转阅读进度</text>
@@ -34,8 +34,9 @@ import { asBytes, detectFormat, restoreOffset } from '../../common/reader-text'
 import { PAGE_BYTES, PAGE_ROWS, makePage, previousStart } from '../../common/reader-pages'
 import { marks } from '../../common/book-marks'
 import { seekStart } from '../../common/reader-seek'
-import { getKeepScreenOn } from '../../common/reader-settings'
+import { getKeepScreenOn, getLockBrightness } from '../../common/reader-settings'
 import { readingScreen } from '../../common/reading-screen'
+import { readingBrightness } from '../../common/reading-brightness'
 
 const SAVE_INTERVAL = 60000
 const HISTORY_LIMIT = 64
@@ -43,10 +44,11 @@ const HISTORY_LIMIT = 64
 export default {
   public: { uri: '', title: '' },
   private: { lines: Array.from({ length: PAGE_ROWS }, () => ({ text: ' ' })), status: '正在加载', saveError: '', progress: '',
-    controlsVisible: false, jumpVisible: false, jumpPercent: 0, screenError: '' },
+    controlsVisible: false, jumpVisible: false, jumpPercent: 0, screenError: '', brightnessError: '' },
   onInit() {
     this.dead = false
     this.screenSequence = 0
+    this.brightnessSequence = 0
     this.hidden = false
     this.loading = false
     this.current = null
@@ -64,11 +66,12 @@ export default {
     this.key = 'reader.v1:' + this.uri
   },
   onReady() { this.open() },
-  onShow() { this.hidden = false; this.scheduleSave(); this.applyScreenSetting() },
-  onHide() { this.hidden = true; this.releaseScreen(); this.save() },
+  onShow() { this.hidden = false; this.scheduleSave(); this.applyScreenSetting(); this.applyBrightnessSetting() },
+  onHide() { this.hidden = true; this.releaseScreen(); this.releaseBrightness(); this.save() },
   onDestroy() {
     this.dead = true
     this.releaseScreen()
+    this.releaseBrightness()
     if (this.readTimer) clearTimeout(this.readTimer)
     this.save()
     this.cache = []
@@ -91,6 +94,23 @@ export default {
   releaseScreen() {
     this.screenSequence++
     readingScreen.release(this)
+  },
+  applyBrightnessSetting() {
+    const sequence = ++this.brightnessSequence
+    this.brightnessError = ''
+    getLockBrightness((enabled) => {
+      if (this.dead || this.hidden || sequence !== this.brightnessSequence) return
+      if (!enabled) { readingBrightness.unlock(this); return }
+      readingBrightness.lock(this, () => {
+        if (!this.dead && !this.hidden && sequence === this.brightnessSequence) {
+          this.brightnessError = '锁定亮度失败，点此重试'
+        }
+      })
+    })
+  },
+  releaseBrightness() {
+    this.brightnessSequence++
+    readingBrightness.unlock(this)
   },
   open() {
     if (this.dead || this.loading) return
@@ -241,9 +261,10 @@ export default {
   },
   onFooter() {
     if (this.dead || this.hidden || this.loading) return
-    if (!this.controlsVisible && !this.status && !this.saveError && !this.screenError) return
+    if (!this.controlsVisible && !this.status && !this.saveError && !this.screenError && !this.brightnessError) return
     if (this.failedTarget || !this.current || this.saveError) { this.retry(); return }
     if (this.screenError) { this.applyScreenSetting(); return }
+    if (this.brightnessError) { this.applyBrightnessSetting(); return }
     this.jumpPercent = Math.round(100 * (this.offset - this.meta.dataStart) /
       (this.meta.length - this.meta.dataStart))
     this.jumpVisible = true
@@ -278,6 +299,7 @@ export default {
     if (this.jumpVisible) { this.cancelJump(); return }
     this.hidden = true
     this.releaseScreen()
+    this.releaseBrightness()
     this.save(); router.back()
   },
   scheduleSave() {
