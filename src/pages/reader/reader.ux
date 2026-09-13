@@ -1,13 +1,13 @@
 <template>
   <div class="page">
-    <div class="header">
+    <div class="reading" if="{{!jumpVisible}}" onswipe="onSwipe" onclick="toggleControls">
+      <text class="line" for="{{lines}}" onswipe="onSwipe">{{$item.text}}</text>
+    </div>
+    <div class="header" if="{{controlsVisible || jumpVisible}}">
       <image class="back" src="/common/back.png" onclick="goBack"></image>
       <text class="title">{{title}}</text>
     </div>
-    <div class="reading" if="{{!jumpVisible}}" onswipe="onSwipe">
-      <text class="line" for="{{lines}}" onswipe="onSwipe">{{$item.text}}</text>
-    </div>
-    <div class="footer" if="{{!jumpVisible}}" onclick="onFooter">
+    <div class="footer" if="{{!jumpVisible && (controlsVisible || status || saveError)}}" onclick="onFooter">
       <text class="status">{{status || saveError || progress}}</text>
     </div>
     <div class="jump-panel" if="{{jumpVisible}}">
@@ -31,7 +31,7 @@
 import file from '@system.file'
 import router from '@system.router'
 import { asBytes, detectFormat, restoreOffset } from '../../common/reader-text'
-import { PAGE_BYTES, makePage, previousStart } from '../../common/reader-pages'
+import { PAGE_BYTES, PAGE_ROWS, makePage, previousStart } from '../../common/reader-pages'
 import { marks } from '../../common/book-marks'
 import { seekStart } from '../../common/reader-seek'
 
@@ -40,9 +40,8 @@ const HISTORY_LIMIT = 64
 
 export default {
   public: { uri: '', title: '' },
-  private: { lines: [{ text: ' ' }, { text: ' ' }, { text: ' ' }, { text: ' ' },
-    { text: ' ' }, { text: ' ' }, { text: ' ' }, { text: ' ' }], status: '正在加载', saveError: '', progress: '',
-    jumpVisible: false, jumpPercent: 0 },
+  private: { lines: Array.from({ length: PAGE_ROWS }, () => ({ text: ' ' })), status: '正在加载', saveError: '', progress: '',
+    controlsVisible: false, jumpVisible: false, jumpPercent: 0 },
   onInit() {
     this.dead = false
     this.hidden = false
@@ -137,8 +136,13 @@ export default {
     }
     request()
   },
+  toggleControls() {
+    if (this.dead || this.hidden || this.jumpVisible) return
+    this.controlsVisible = !this.controlsVisible
+  },
   onSwipe(event) {
     if (this.dead || this.hidden || this.loading || this.jumpVisible || !this.current) return
+    if (event.direction === 'up' || event.direction === 'down') this.controlsVisible = false
     if (event.direction === 'up') {
       if (this.current.end >= this.meta.length) { this.status = '已到书尾'; return }
       const known = this.history[this.cursor + 1]
@@ -196,6 +200,7 @@ export default {
     this.loading = false
     this.failedTarget = null
     this.status = ''
+    this.controlsVisible = false
     this.progress = (100 * (page.start - this.meta.dataStart) /
       (this.meta.length - this.meta.dataStart)).toFixed(2) + '%'
     this.scheduleSave()
@@ -215,6 +220,7 @@ export default {
   },
   onFooter() {
     if (this.dead || this.hidden || this.loading) return
+    if (!this.controlsVisible && !this.status && !this.saveError) return
     if (this.failedTarget || !this.current || this.saveError) { this.retry(); return }
     this.jumpPercent = Math.round(100 * (this.offset - this.meta.dataStart) /
       (this.meta.length - this.meta.dataStart))
@@ -278,14 +284,14 @@ export default {
 
 <style>
 .page { width: 100%; height: 100%; padding: 8px; flex-direction: column; background-color: #000000; }
-.header { width: 100%; height: 56px; padding: 0px 30px; align-items: center; flex-shrink: 0; }
+.header { position: absolute; top: 8px; left: 8px; right: 8px; height: 56px; padding: 0px 30px; align-items: center; background-color: #000000; flex-shrink: 0; }
 .back { width: 30px; height: 30px; margin-right: 4px; flex-shrink: 0; }
 .title { flex: 1; font-size: 22px; color: #929292; text-align: center; lines: 1; text-overflow: ellipsis; }
-.reading { width: 100%; height: 320px; padding: 0px 16px; flex-direction: column; flex-shrink: 0; }
-.line { width: 100%; height: 40px; line-height: 40px; font-size: 20px; color: #dedede; lines: 1; flex-shrink: 0; }
-.footer { width: 100%; height: 58px; padding: 0px 24px; align-items: center; flex-shrink: 0; }
+.reading { width: 100%; height: 100%; padding: 2px 16px; flex-direction: column; flex-shrink: 0; }
+.line { width: 100%; height: 43px; line-height: 43px; font-size: 20px; color: #dedede; lines: 1; flex-shrink: 0; }
+.footer { position: absolute; bottom: 8px; left: 8px; right: 8px; height: 58px; padding: 0px 24px; align-items: center; background-color: #000000; flex-shrink: 0; }
 .status { width: 100%; font-size: 16px; line-height: 22px; color: #929292; text-align: center; lines: 2; }
-.jump-panel { width: 100%; height: 378px; padding: 16px 12px; flex-direction: column; align-items: center; flex-shrink: 0; }
+.jump-panel { width: 100%; height: 378px; margin-top: 56px; padding: 16px 12px; flex-direction: column; align-items: center; flex-shrink: 0; }
 .jump-label { width: 100%; height: 40px; font-size: 24px; color: #dedede; text-align: center; }
 .jump-value { width: 100%; height: 80px; font-size: 40px; color: #f5f5f5; text-align: center; }
 .jump-row { width: 100%; height: 72px; justify-content: space-between; align-items: center; flex-shrink: 0; }

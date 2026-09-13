@@ -6,12 +6,13 @@ The Vela JS application lists imported TXT filenames on its black home page usin
 
 ## Commands
 
-| Action                      | Command                                               |
-| :-------------------------- | :---------------------------------------------------- |
-| Install                     | `npm ci`                                              |
-| Build                       | `npm run build`                                       |
-| Inspect built-in BIN shell  | `npm run inspect-bin`                                 |
-| Pack TXT to installable BIN | `npm run pack-book -- --input <path> --output <path>` |
+| Action                                                         | Command                                               |
+| :------------------------------------------------------------- | :---------------------------------------------------- |
+| Install                                                        | `npm ci`                                              |
+| Build                                                          | `npm run build`                                       |
+| Release (requires `sign/release/` certificate and private key) | `npx --no-install aiot release`                       |
+| Inspect built-in BIN shell                                     | `npm run inspect-bin`                                 |
+| Pack TXT to installable BIN                                    | `npm run pack-book -- --input <path> --output <path>` |
 
 Update this table when the application toolchain and validation commands are established. Do not assume commands from another Vela project apply to this repository.
 
@@ -27,6 +28,6 @@ Use `npm run build` to validate changes to the application skeleton. Build outpu
 
 # Documents
 
-The reader uses vertical swipes for instant page turns: eight fixed text rows, no scrolling list, smooth animation, scroll positioning, or `$nextTick`. The user's Watch 4 runtime lacks `$nextTick`. Keep the page-sized I/O and fixed cache/history limits in `docs/reader.md`; do not reintroduce the continuous-scroll window design. The reference BIN was inspected for interaction only and is not a project dependency.
+The reader uses vertical swipes for instant page turns: ten fixed text rows with full-height reading and overlay controls, no scrolling list, smooth animation, scroll positioning, or `$nextTick`. The user's Watch 4 runtime lacks `$nextTick`. Keep the page-sized I/O and fixed cache/history limits in `docs/reader.md`; do not reintroduce the continuous-scroll window design. The reference BIN was inspected for interaction only and is not a project dependency.
 
 See `docs/`.

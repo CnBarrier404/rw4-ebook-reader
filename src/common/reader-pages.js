@@ -1,7 +1,7 @@
 import { decoder } from './reader-text'
 
 export const PAGE_BYTES = 1024
-export const PAGE_ROWS = 8
+export const PAGE_ROWS = 10
 const COLUMNS = 17
 
 export function previousStart(end, format) {
@@ -10,7 +10,7 @@ export function previousStart(end, format) {
 }
 
 // Forward reads start at a page boundary. Backward reads end at one.
-// Keep only eight rows, including during backward decoding.
+// Keep only PAGE_ROWS rows, including during backward decoding.
 export function makePage(bytes, start, end, format, backwards = false) {
   const eof = start + bytes.length === end
   const read = decoder(bytes, format.encoding, eof)
