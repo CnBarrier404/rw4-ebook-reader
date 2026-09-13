@@ -27,4 +27,6 @@ Use `npm run build` to validate changes to the application skeleton. Build outpu
 
 # Documents
 
+The reader uses vertical swipes for instant page turns: eight fixed text rows, no scrolling list, smooth animation, scroll positioning, or `$nextTick`. The user's Watch 4 runtime lacks `$nextTick`. Keep the page-sized I/O and fixed cache/history limits in `docs/reader.md`; do not reintroduce the continuous-scroll window design. The reference BIN was inspected for interaction only and is not a project dependency.
+
 See `docs/`.

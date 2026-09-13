@@ -1,16 +1,14 @@
 <template>
   <div class="page">
     <div class="header">
-      <image class="indicator" src="/common/back.png" onclick="goBack"></image>
+      <image class="back" src="/common/back.png" onclick="goBack"></image>
       <text class="title">{{title}}</text>
     </div>
-      <list id="reading" class="reading" onscroll="onScroll" onscrollend="onScrollEnd">
-        <list-item class="row" type="line" for="{{rows}}" tid="slot">
-          <text class="line">{{$item.text}}</text>
-        </list-item>
-    </list>
-    <div class="footer">
-      <text class="status" onclick="retry">{{status || saveError || progress}}</text>
+    <div class="reading" onswipe="onSwipe">
+      <text class="line" for="{{lines}}" onswipe="onSwipe">{{$item}}</text>
+    </div>
+    <div class="footer" onclick="retry">
+      <text class="status">{{status || saveError || progress}}</text>
     </div>
   </div>
 </template>
@@ -19,315 +17,195 @@
 import file from '@system.file'
 import storage from '@system.storage'
 import router from '@system.router'
-import { READ_BYTES, ROW_HEIGHT, asBytes, detectFormat, windowStart, makeWindow, restoreOffset } from '../../common/reader-text'
+import { asBytes, detectFormat, restoreOffset } from '../../common/reader-text'
+import { PAGE_BYTES, makePage, previousStart } from '../../common/reader-pages'
 import { createProgressStore } from '../../common/reader-progress'
 
 const marks = createProgressStore(storage)
-const READ_RETRIES = 2
-const MAX_READ_PARTS = 8
-const READ_RETRY_DELAY = 20
 const SAVE_INTERVAL = 60000
+const HISTORY_LIMIT = 64
 
 export default {
   public: { uri: '', title: '' },
-  private: { rows: [], status: '正在加载', saveError: '', progress: '' },
-
+  private: { lines: [' ', ' ', ' ', ' ', ' ', ' ', ' ', ' '], status: '正在加载', saveError: '', progress: '' },
   onInit() {
     this.dead = false
     this.hidden = false
     this.loading = false
-    this.rebasing = false
+    this.current = null
+    this.history = []
+    this.cursor = 0
+    this.cache = []
+    this.failedTarget = null
     this.offset = 0
-    this.inset = 0
     this.saved = -1
     this.saving = -1
-    this.progressReady = false
-    this.scrolling = false
     this.saveSequence = 0
     this.saveTimer = 0
+    this.readTimer = 0
     this.nextSaveAt = Date.now() + SAVE_INTERVAL
     this.key = 'reader.v1:' + this.uri
   },
-
   onReady() { this.open() },
-  onShow() {
-    this.hidden = false
-    this.scrolling = false
-    this.scheduleSave()
-  },
-  onHide() {
-    this.hidden = true
-    this.cancelSaveTimer()
-    this.save()
-  },
+  onShow() { this.hidden = false; this.scheduleSave() },
+  onHide() { this.hidden = true; this.save() },
   onDestroy() {
     this.dead = true
-    if (this.restoreTimer) clearTimeout(this.restoreTimer)
-    if (this.readRetryTimer) clearTimeout(this.readRetryTimer)
-    this.cancelSaveTimer()
+    if (this.readTimer) clearTimeout(this.readTimer)
     this.save()
-    this.rows = []
+    this.cache = []
+    this.history = []
+    this.current = null
   },
   open() {
-    if (this.loading || this.dead) return
+    if (this.dead || this.loading) return
     this.loading = true
     this.status = '正在加载'
     file.get({
       uri: this.uri,
       success: (meta) => {
         if (this.dead) return
-        if (!meta.length) {
-          this.failure('书籍为空'); return
-        }
-        this.meta = meta
-        file.readArrayBuffer({
-          uri: this.uri, position: 0, length: Math.min(3, meta.length),
-          success: (data) => {
+        if (!meta.length) { this.failure('书籍为空'); return }
+        this.readBytes(0, Math.min(3, meta.length), (bytes) => {
+          const format = detectFormat(bytes)
+          meta.encoding = format.encoding
+          meta.dataStart = format.dataStart
+          if (meta.length <= meta.dataStart) { this.failure('书籍为空'); return }
+          if (meta.encoding !== 'utf-8' && (meta.length - meta.dataStart) % 2) {
+            this.failure('UTF-16 文件不完整'); return
+          }
+          this.meta = meta
+          marks.get(this.key, (value, persisted) => {
             if (this.dead) return
-            const format = detectFormat(asBytes(data.buffer))
-            meta.encoding = format.encoding
-            meta.dataStart = format.dataStart
-            if (meta.length === meta.dataStart) {
-              this.failure('书籍为空'); return
-            }
-            if (meta.encoding !== 'utf-8' && (meta.length - meta.dataStart) % 2) {
-              this.failure('UTF-16 文件不完整'); return
-            }
-            marks.get(this.key, (value, persisted) => {
-              if (this.dead) return
-              this.offset = restoreOffset(value, meta)
-              this.saved = persisted ? this.offset : -1
-              this.progressReady = true
-              this.nextSaveAt = Date.now() + SAVE_INTERVAL
-              this.loading = false
-              this.loadWindow()
-            })
-          },
-          fail: () => this.failure('读取失败，点此重试')
-        })
+            const start = restoreOffset(value, meta)
+            this.saved = persisted ? start : -1
+            this.loading = false
+            this.loadPage({ start, mode: 'open' })
+          })
+        }, () => this.failure('读取失败，点此重试'))
       },
-      fail: () => this.failure('书籍不存在或无法读取，点此重试')
+      fail: () => this.failure('无法打开书籍，点此重试')
     })
   },
-
-  failure(message) {
-    if (this.dead) return
-    this.loading = false
-    this.rebasing = false
-    this.status = message
-  },
-
-  applyWindow(nextRows) {
-    // Keep the list's item identities stable across normal window changes.
-    // Replacing 88 new objects makes the native list diff and relayout the
-    // whole window at once. The slot id lets Vela reuse the same list-item
-    // nodes while only the line values change.
-    if (this.rows.length === nextRows.length && this.rows.length > 0) {
-      for (let i = 0; i < nextRows.length; i++) {
-        const current = this.rows[i]
-        const next = nextRows[i]
-        current.text = next.text
-        current.offset = next.offset
-        current.end = next.end
-        current.slot = i
-      }
-      // Reassign a shallow array copy to notify the template while retaining
-      // every row object and its stable tid.
-      this.rows = this.rows.slice()
-      return true
-    }
-    this.rows = nextRows.map((row, i) => ({
-      text: row.text, offset: row.offset, end: row.end, slot: i
-    }))
-    return false
-  },
-
-  retry() {
-    if (this.saveError) { this.save(); return }
-    if (!this.rows.length) this.open()
-    else { this.save(); this.loadWindow() }
-  },
-
-  goBack() {
-    this.save()
-    router.back()
-  },
-
-  readWindow(position, length, done, failed) {
-    if (!Number.isFinite(length) || length <= 0) {
-      failed(Error('empty read'))
-      return
-    }
-    const target = new Uint8Array(length)
+  readBytes(start, length, done, failed) {
+    const buffer = new Uint8Array(length)
     let filled = 0
-    let parts = 0
-    let retries = 0
-    const retry = (data, code) => {
-      if (retries < READ_RETRIES) {
-        retries++
-        this.readRetryTimer = setTimeout(() => {
-          this.readRetryTimer = 0
-          request()
-        }, READ_RETRY_DELAY)
-      } else failed(data || Error('read failed'), code)
-    }
+    let requests = 0
     const request = () => {
       if (this.dead) return
-      const remaining = length - filled
-      parts++
+      if (++requests > 8) { failed(); return }
+      const retry = () => {
+        if (this.dead) return
+        this.readTimer = setTimeout(() => { this.readTimer = 0; request() }, 30)
+      }
       file.readArrayBuffer({
-        uri: this.uri, position: position + filled, length: remaining,
+        uri: this.uri, position: start + filled, length: length - filled,
         success: (data) => {
           if (this.dead) return
           let bytes
-          try {
-            bytes = asBytes(data && data.buffer ? data.buffer : new Uint8Array(0))
-          } catch (error) {
-            retry(error)
-            return
-          }
-          if (!bytes.length) {
-            retry(Error('empty read'))
-            return
-          }
-          const count = Math.min(bytes.length, remaining)
-          target.set(bytes.subarray(0, count), filled)
+          try { bytes = asBytes(data.buffer) } catch (error) { retry(); return }
+          if (!bytes.length) { retry(); return }
+          const count = Math.min(bytes.length, length - filled)
+          buffer.set(bytes.subarray(0, count), filled)
           filled += count
-          retries = 0
-          if (filled >= length) {
-            done(target)
-          } else if (parts < MAX_READ_PARTS) {
-            request()
-          } else {
-            failed(Error('short read'))
-          }
+          if (filled === length) done(buffer)
+          else retry()
         },
-        fail: (data, code) => retry(data, code)
+        fail: retry
       })
     }
     request()
   },
-
-  loadWindow() {
-    if (this.loading || this.dead) return
-    this.loading = true
-    const anchor = this.offset
-    const start = windowStart(anchor, this.meta)
-    const length = Math.min(READ_BYTES, this.meta.length - start)
-    this.readWindow(start, length, (bytes) => {
-        if (this.dead) return
-        this.loading = false
-        // Input can continue while I/O is in flight. Never restore an old anchor.
-        if (this.offset !== anchor) { this.loadWindow(); return }
-        try {
-          const window = makeWindow(bytes, start, anchor, this.meta.length, this.meta)
-          const previousIndex = this.rowIndex
-          this.rebasing = true
-          this.rowIndex = window.index
-          const reusedRows = this.applyWindow(window.rows)
-          this.status = ''
-          this.updateProgress()
-          this.$nextTick(() => {
-            if (this.dead) return
-            try {
-              const list = this.$element('reading')
-              if (reusedRows && Number.isFinite(previousIndex)) {
-                // A same-sized window keeps every fixed-height list item in
-                // place. Adjust the existing scroll position once instead of
-                // resolving an item index and then issuing a second scroll.
-                list.scrollBy({
-                  top: (window.index - previousIndex) * ROW_HEIGHT,
-                  behavior: 'instant'
-                })
-              } else {
-                list.scrollTo({ index: window.index, behavior: 'instant' })
-                if (this.inset) list.scrollBy({ top: this.inset, behavior: 'instant' })
-              }
-              // Do not enqueue another native nextTick from its own callback:
-              // older Vela runtimes can invalidate the callback queue while
-              // iterating it and crash in __uv_prepare_cb / js_free_shape.
-              this.restoreTimer = setTimeout(() => {
-                this.restoreTimer = 0
-                this.rebasing = false
-              }, 0)
-            } catch (error) {
-              this.rebasing = false
-              this.failure('设备不支持阅读定位')
-            }
-          })
-        } catch (error) {
-          this.failure(error.code === 'TEXT_ENCODING' ? error.message : '正文读取失败，点此重试')
-        }
-      }, (error, code) => {
-        if (this.dead) return
-        this.loading = false
-        if (this.offset !== anchor) { this.loadWindow(); return }
-        console.error('Reader window failed', this.uri, start, length, code || error)
-        this.failure('正文读取失败，点此重试')
+  onSwipe(event) {
+    if (this.dead || this.hidden || this.loading || !this.current) return
+    if (event.direction === 'up') {
+      if (this.current.end >= this.meta.length) { this.status = '已到书尾'; return }
+      const known = this.history[this.cursor + 1]
+      this.loadPage({ start: this.current.end, end: known && known.end, mode: 'next' })
+    } else if (event.direction === 'down') {
+      if (this.current.start <= this.meta.dataStart) { this.status = '已到书首'; return }
+      const known = this.history[this.cursor - 1]
+      this.loadPage(known ? { start: known.start, end: known.end, mode: 'back' } : {
+        start: previousStart(this.current.start, this.meta), end: this.current.start, mode: 'previous'
       })
-  },
-
-  onScroll(event) {
-    if (this.rebasing || this.dead || !this.rows.length || !Number.isFinite(event.scrollY)) return
-    const y = Math.max(0, event.scrollY)
-    this.rowIndex = Math.min(this.rows.length - 1, Math.floor(y / ROW_HEIGHT))
-    this.offset = this.rows[this.rowIndex].offset
-    this.inset = y % ROW_HEIGHT
-    this.scrolling = true
-    this.scheduleSave()
-  },
-
-  onScrollEnd() {
-    if (this.rebasing || this.dead || !this.rows.length) return
-    this.scrolling = false
-    this.scheduleSave()
-    this.updateProgress()
-    const index = this.rowIndex || 0
-    if ((index < 12 && this.rows[0].offset > this.meta.dataStart) ||
-        (index > this.rows.length - 24 && this.rows[this.rows.length - 1].end < this.meta.length)) {
-      this.loadWindow()
     }
   },
-
-  updateProgress() {
-    this.progress = Math.floor(100 * (this.offset - this.meta.dataStart) / (this.meta.length - this.meta.dataStart)) + '%'
+  loadPage(target) {
+    if (this.dead || this.loading) return
+    this.loading = true
+    this.failedTarget = target
+    const cached = target.mode !== 'previous' && this.cache.find((page) =>
+      page.start === target.start && (!target.end || page.end === target.end))
+    if (cached) { this.commitPage(cached, target.mode); return }
+    const end = target.end || this.meta.length
+    this.readBytes(target.start, Math.min(PAGE_BYTES, end - target.start), (bytes) => {
+      try {
+        const page = makePage(bytes, target.start, end, this.meta, target.mode === 'previous')
+        this.commitPage(page, target.mode)
+      } catch (error) {
+        this.failure(error.code === 'TEXT_ENCODING' ? error.message : '分页失败，点此重试')
+      }
+    }, () => this.failure('读取失败，点此重试'))
   },
-  cancelSaveTimer() {
-    if (this.saveTimer) clearTimeout(this.saveTimer)
-    this.saveTimer = 0
+  commitPage(page, mode) {
+    if (this.dead) return
+    const lines = page.rows.map((row) => row.text)
+    while (lines.length < 8) lines.push(' ')
+    this.lines = lines
+    const range = { start: page.start, end: page.end }
+    if (mode === 'open') { this.history = [range]; this.cursor = 0 }
+    else if (mode === 'back') this.cursor--
+    else if (mode === 'previous') {
+      this.history.unshift(range)
+      if (this.history.length > HISTORY_LIMIT) this.history.pop()
+      this.cursor = 0
+    } else {
+      this.cursor++
+      this.history[this.cursor] = range
+      if (this.history.length > HISTORY_LIMIT) { this.history.shift(); this.cursor-- }
+    }
+    this.current = page
+    this.offset = page.start
+    this.cache = this.cache.filter((item) => item.start !== page.start)
+    this.cache.push(page)
+    if (this.cache.length > 3) this.cache.shift()
+    this.loading = false
+    this.failedTarget = null
+    this.status = ''
+    this.progress = (100 * (page.start - this.meta.dataStart) /
+      (this.meta.length - this.meta.dataStart)).toFixed(2) + '%'
+    this.scheduleSave()
   },
+  failure(message) {
+    if (this.dead) return
+    this.loading = false
+    this.status = message
+  },
+  retry() {
+    if (this.loading || this.dead) return
+    if (this.failedTarget) this.loadPage(this.failedTarget)
+    else if (!this.current) this.open()
+    else if (this.saveError) this.save()
+  },
+  goBack() { this.save(); router.back() },
   scheduleSave() {
-    if (this.dead || this.hidden || !this.progressReady || this.saveTimer ||
-        this.saving >= 0 || this.offset === this.saved) return
+    if (this.dead || this.hidden || !this.current || this.saveTimer || this.saving >= 0 || this.saved === this.offset) return
     const delay = this.nextSaveAt - Date.now()
-    if (delay <= 0) {
-      // An expired checkpoint waits for scrollend; never poll during a gesture.
-      if (!this.scrolling) this.save()
-      return
-    }
-    this.saveTimer = setTimeout(() => {
-      this.saveTimer = 0
-      this.scheduleSave()
-    }, delay)
+    if (delay <= 0) { this.save(); return }
+    this.saveTimer = setTimeout(() => { this.saveTimer = 0; this.scheduleSave() }, delay)
   },
   save() {
-    if (!this.progressReady || !this.meta || !this.meta.encoding || !Number.isFinite(this.meta.dataStart) ||
-        !Number.isFinite(this.offset) || this.offset < this.meta.dataStart ||
-        this.offset >= this.meta.length || this.saving === this.offset ||
-        (this.saved === this.offset && this.saving < 0)) return
+    if (this.saveTimer) clearTimeout(this.saveTimer)
+    this.saveTimer = 0
+    if (!this.current || this.saving === this.offset || (this.saved === this.offset && this.saving < 0)) return
     const offset = this.offset
     const sequence = ++this.saveSequence
-    this.cancelSaveTimer()
     this.saving = offset
-    marks.set(this.key, JSON.stringify({
-      version: 2, encoding: this.meta.encoding, dataStart: this.meta.dataStart,
-      length: this.meta.length, modified: this.meta.lastModifiedTime, offset
-    }), (ok) => {
-      // A lifecycle flush may have queued a newer position during this write.
+    marks.set(this.key, JSON.stringify({ version: 2, encoding: this.meta.encoding,
+      dataStart: this.meta.dataStart, length: this.meta.length, modified: this.meta.lastModifiedTime, offset }), (ok) => {
       if (sequence !== this.saveSequence) return
       this.saving = -1
       if (ok) this.saved = offset
-      // Failed writes also wait a full interval before automatic retry.
       this.nextSaveAt = Date.now() + SAVE_INTERVAL
       if (!this.dead) this.saveError = ok ? '' : '进度保存失败，点此重试'
       this.scheduleSave()
@@ -338,12 +216,11 @@ export default {
 
 <style>
 .page { width: 100%; height: 100%; padding: 8px; flex-direction: column; background-color: #000000; }
-.header { height: 56px; width: 100%; padding: 0px 30px; align-items: center; flex-shrink: 0; }
-.indicator { width: 30px; height: 30px; margin-right: 4px; flex-shrink: 0; }
+.header { width: 100%; height: 56px; padding: 0px 30px; align-items: center; flex-shrink: 0; }
+.back { width: 30px; height: 30px; margin-right: 4px; flex-shrink: 0; }
 .title { flex: 1; font-size: 22px; color: #929292; text-align: center; lines: 1; text-overflow: ellipsis; }
-.reading { width: 100%; height: 322px; flex-shrink: 1; }
-.row { width: 100%; height: 40px; padding: 0px 16px; align-items: center; }
-.line { width: 100%; font-size: 20px; line-height: 40px; color: #dedede; lines: 1; }
-.footer { width: 100%; height: 56px; padding: 0px 30px; flex-shrink: 0; align-items: center; }
-.status { width: 100%; height: 56px; line-height: 56px; font-size: 18px; color: #929292; text-align: center; lines: 1; }
+.reading { width: 100%; height: 320px; padding: 0px 16px; flex-direction: column; flex-shrink: 0; }
+.line { width: 100%; height: 40px; line-height: 40px; font-size: 20px; color: #dedede; lines: 1; flex-shrink: 0; }
+.footer { width: 100%; height: 58px; padding: 0px 24px; align-items: center; flex-shrink: 0; }
+.status { width: 100%; font-size: 16px; line-height: 22px; color: #929292; text-align: center; lines: 2; }
 </style>
