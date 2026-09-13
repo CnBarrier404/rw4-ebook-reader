@@ -2,7 +2,7 @@
   <div class="page">
     <div class="top-bar">
       <text class="title">电子书</text>
-      <div class="settings-button">
+      <div class="settings-button" onclick="openSettings">
         <image class="settings-icon" src="/common/settings.png"></image>
       </div>
     </div>
@@ -37,6 +37,8 @@ export default {
   openBook(book) {
     router.push({ uri: '/pages/reader', params: { uri: book.uri, title: book.title } })
   },
+
+  openSettings() { router.push({ uri: '/pages/settings' }) },
 
   onShow() {
     this.active = true

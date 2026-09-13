@@ -6,7 +6,7 @@
   "minAPILevel": 1,
   "icon": "/common/icon.png",
   "deviceTypeList": ["watch"],
-  "features": [{ "name": "system.file" }, { "name": "system.storage" }, { "name": "system.router" }],
+  "features": [{ "name": "system.file" }, { "name": "system.storage" }, { "name": "system.router" }, { "name": "system.brightness" }],
   "config": {
     "designWidth": 390,
     "logLevel": "debug"
@@ -16,6 +16,9 @@
     "pages": {
       "pages/index": {
         "component": "index"
+      },
+      "pages/settings": {
+        "component": "settings"
       },
       "pages/reader": {
         "component": "reader"

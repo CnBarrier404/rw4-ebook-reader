@@ -7,8 +7,8 @@
       <image class="back" src="/common/back.png" onclick="goBack"></image>
       <text class="title">{{title}}</text>
     </div>
-    <div class="footer" if="{{!jumpVisible && (controlsVisible || status || saveError)}}" onclick="onFooter">
-      <text class="status">{{status || saveError || progress}}</text>
+    <div class="footer" if="{{!jumpVisible && (controlsVisible || status || saveError || screenError)}}" onclick="onFooter">
+      <text class="status">{{status || saveError || screenError || progress}}</text>
     </div>
     <div class="jump-panel" if="{{jumpVisible}}">
       <text class="jump-label">跳转阅读进度</text>
@@ -34,6 +34,8 @@ import { asBytes, detectFormat, restoreOffset } from '../../common/reader-text'
 import { PAGE_BYTES, PAGE_ROWS, makePage, previousStart } from '../../common/reader-pages'
 import { marks } from '../../common/book-marks'
 import { seekStart } from '../../common/reader-seek'
+import { getKeepScreenOn } from '../../common/reader-settings'
+import { readingScreen } from '../../common/reading-screen'
 
 const SAVE_INTERVAL = 60000
 const HISTORY_LIMIT = 64
@@ -41,9 +43,10 @@ const HISTORY_LIMIT = 64
 export default {
   public: { uri: '', title: '' },
   private: { lines: Array.from({ length: PAGE_ROWS }, () => ({ text: ' ' })), status: '正在加载', saveError: '', progress: '',
-    controlsVisible: false, jumpVisible: false, jumpPercent: 0 },
+    controlsVisible: false, jumpVisible: false, jumpPercent: 0, screenError: '' },
   onInit() {
     this.dead = false
+    this.screenSequence = 0
     this.hidden = false
     this.loading = false
     this.current = null
@@ -61,15 +64,33 @@ export default {
     this.key = 'reader.v1:' + this.uri
   },
   onReady() { this.open() },
-  onShow() { this.hidden = false; this.scheduleSave() },
-  onHide() { this.hidden = true; this.save() },
+  onShow() { this.hidden = false; this.scheduleSave(); this.applyScreenSetting() },
+  onHide() { this.hidden = true; this.releaseScreen(); this.save() },
   onDestroy() {
     this.dead = true
+    this.releaseScreen()
     if (this.readTimer) clearTimeout(this.readTimer)
     this.save()
     this.cache = []
     this.history = []
     this.current = null
+  },
+  applyScreenSetting() {
+    const sequence = ++this.screenSequence
+    this.screenError = ''
+    getKeepScreenOn((enabled) => {
+      if (this.dead || this.hidden || sequence !== this.screenSequence) return
+      if (!enabled) { readingScreen.release(this); return }
+      readingScreen.request(this, true, () => {
+        if (!this.dead && !this.hidden && sequence === this.screenSequence) {
+          this.screenError = '保持亮屏失败，点此重试'
+        }
+      })
+    })
+  },
+  releaseScreen() {
+    this.screenSequence++
+    readingScreen.release(this)
   },
   open() {
     if (this.dead || this.loading) return
@@ -220,8 +241,9 @@ export default {
   },
   onFooter() {
     if (this.dead || this.hidden || this.loading) return
-    if (!this.controlsVisible && !this.status && !this.saveError) return
+    if (!this.controlsVisible && !this.status && !this.saveError && !this.screenError) return
     if (this.failedTarget || !this.current || this.saveError) { this.retry(); return }
+    if (this.screenError) { this.applyScreenSetting(); return }
     this.jumpPercent = Math.round(100 * (this.offset - this.meta.dataStart) /
       (this.meta.length - this.meta.dataStart))
     this.jumpVisible = true
@@ -254,6 +276,8 @@ export default {
   },
   goBack() {
     if (this.jumpVisible) { this.cancelJump(); return }
+    this.hidden = true
+    this.releaseScreen()
     this.save(); router.back()
   },
   scheduleSave() {
