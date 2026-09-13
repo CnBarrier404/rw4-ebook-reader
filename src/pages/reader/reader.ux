@@ -4,8 +4,8 @@
       <text class="line" for="{{lines}}" onswipe="onSwipe">{{$item.text}}</text>
     </div>
     <div class="header" if="{{controlsVisible || jumpVisible}}">
-      <image class="back" src="/common/back.png" onclick="goBack"></image>
-      <text class="title">{{title}}</text>
+      <text class="back header-text" onclick="goBack">&lt;</text>
+      <text class="title header-text">{{title}}</text>
     </div>
     <div class="footer" if="{{!jumpVisible && (controlsVisible || status || saveError || screenError)}}" onclick="onFooter">
       <text class="status">{{status || saveError || screenError || progress}}</text>
@@ -309,8 +309,9 @@ export default {
 <style>
 .page { width: 100%; height: 100%; padding: 8px; flex-direction: column; background-color: #000000; }
 .header { position: absolute; top: 8px; left: 8px; right: 8px; height: 56px; padding: 0px 30px; align-items: center; background-color: #000000; flex-shrink: 0; }
-.back { width: 30px; height: 30px; margin-right: 4px; flex-shrink: 0; }
-.title { flex: 1; font-size: 22px; color: #929292; text-align: center; lines: 1; text-overflow: ellipsis; }
+.back { width: 30px; height: 30px; line-height: 20px; margin-right: 2px; font-size: 34px; font-weight: normal; text-align: center; lines: 1; flex-shrink: 0; }
+.title { flex: 1; font-size: 22px; text-align: center; lines: 1; text-overflow: ellipsis; }
+.header-text { color: #929292; }
 .reading { width: 100%; height: 100%; padding: 2px 16px; flex-direction: column; flex-shrink: 0; }
 .line { width: 100%; height: 43px; line-height: 43px; font-size: 20px; color: #dedede; lines: 1; flex-shrink: 0; }
 .footer { position: absolute; bottom: 8px; left: 8px; right: 8px; height: 58px; padding: 0px 24px; align-items: center; background-color: #000000; flex-shrink: 0; }
