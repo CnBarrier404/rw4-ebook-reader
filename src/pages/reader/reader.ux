@@ -5,7 +5,7 @@
       <text class="title">{{title}}</text>
     </div>
     <div class="reading" if="{{!jumpVisible}}" onswipe="onSwipe">
-      <text class="line" for="{{lines}}" onswipe="onSwipe">{{$item}}</text>
+      <text class="line" for="{{lines}}" onswipe="onSwipe">{{$item.text}}</text>
     </div>
     <div class="footer" if="{{!jumpVisible}}" onclick="onFooter">
       <text class="status">{{status || saveError || progress}}</text>
@@ -40,7 +40,8 @@ const HISTORY_LIMIT = 64
 
 export default {
   public: { uri: '', title: '' },
-  private: { lines: [' ', ' ', ' ', ' ', ' ', ' ', ' ', ' '], status: '正在加载', saveError: '', progress: '',
+  private: { lines: [{ text: ' ' }, { text: ' ' }, { text: ' ' }, { text: ' ' },
+    { text: ' ' }, { text: ' ' }, { text: ' ' }, { text: ' ' }], status: '正在加载', saveError: '', progress: '',
     jumpVisible: false, jumpPercent: 0 },
   onInit() {
     this.dead = false
@@ -102,7 +103,8 @@ export default {
     })
   },
   readBytes(start, length, done, failed) {
-    const buffer = new Uint8Array(length)
+    // Complete reads can be decoded directly; allocate only for short reads.
+    let buffer = null
     let filled = 0
     let requests = 0
     const request = () => {
@@ -120,6 +122,11 @@ export default {
           try { bytes = asBytes(data.buffer) } catch (error) { retry(); return }
           if (!bytes.length) { retry(); return }
           const count = Math.min(bytes.length, length - filled)
+          if (!buffer && count === length) {
+            done(bytes.length === length ? bytes : bytes.subarray(0, length))
+            return
+          }
+          if (!buffer) buffer = new Uint8Array(length)
           buffer.set(bytes.subarray(0, count), filled)
           filled += count
           if (filled === length) done(buffer)
@@ -163,9 +170,11 @@ export default {
   },
   commitPage(page, mode) {
     if (this.dead) return
-    const lines = page.rows.map((row) => row.text)
-    while (lines.length < 8) lines.push(' ')
-    this.lines = lines
+    // Keep the observed rows stable, including when the last page is short.
+    for (let i = 0; i < this.lines.length; i++) {
+      const text = i < page.rows.length ? page.rows[i].text : ' '
+      if (this.lines[i].text !== text) this.lines[i].text = text
+    }
     const range = { start: page.start, end: page.end }
     if (mode === 'open' || mode === 'jump') { this.history = [range]; this.cursor = 0; this.cache = [] }
     else if (mode === 'back') this.cursor--
@@ -180,7 +189,8 @@ export default {
     }
     this.current = page
     this.offset = page.start
-    this.cache = this.cache.filter((item) => item.start !== page.start)
+    const cachedIndex = this.cache.findIndex((item) => item.start === page.start)
+    if (cachedIndex >= 0) this.cache.splice(cachedIndex, 1)
     this.cache.push(page)
     if (this.cache.length > 3) this.cache.shift()
     this.loading = false
